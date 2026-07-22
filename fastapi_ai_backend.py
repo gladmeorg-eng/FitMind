@@ -2,16 +2,14 @@ import os
 from fastapi import FastAPI
 from google import genai
 
-app = FastAPI()
-
-# Initialize Gemini Client automatically using GEMINI_API_KEY env var
+# Initialize Gemini using the key you saved in Render
 gemini_key = os.getenv("GEMINI_API_KEY")
 client = genai.Client(api_key=gemini_key) if gemini_key else None
 
 @app.post("/v3/gyms/{gym_id}/ai/chat")
 async def ai_chat(gym_id: str, message: str):
     if not client:
-        return {"response": "Demo Mode: Add GEMINI_API_KEY to Render Environment Variables."}
+        return {"response": "Error: GEMINI_API_KEY not found in Render environment variables."}
     
     try:
         response = client.models.generate_content(
