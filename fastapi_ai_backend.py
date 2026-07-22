@@ -30,11 +30,11 @@ async def ai_chat(gym_id: str, request: ChatRequest):
         )
         return {
             "response": response.text,
-            "conversation_id": request.conversation_id
+            "conversation_id": request.conversation_id or "conv_123"
         }
     except Exception as e:
         return {"error": str(e)}
-
+        
 import asyncio
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
