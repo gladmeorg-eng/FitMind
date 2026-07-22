@@ -3,12 +3,17 @@ import os
 from fastapi import FastAPI
 from google import genai
 
-# Initialize FastAPI app (this fixes the NameError)
+# Initialize FastAPI app
 app = FastAPI()
 
-# Initialize Gemini using the key you saved in Render
+# Initialize Gemini using the key saved in Render
 gemini_key = os.getenv("GEMINI_API_KEY")
 client = genai.Client(api_key=gemini_key) if gemini_key else None
+
+# Root route for Render health checks
+@app.get("/")
+async def root():
+    return {"status": "FitMind AI Backend is live!", "docs": "/docs"}
 
 @app.post("/v3/gyms/{gym_id}/ai/chat")
 async def ai_chat(gym_id: str, message: str):
