@@ -121,9 +121,9 @@ async def get_retention_alerts(
     gym_id: str,
     severity: Optional[str] = "all",
     status: Optional[str] = "open",
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
-    """Get all retention alerts for a gym, optionally filtered."""
+    # Get all retention alerts for a gym, optionally filtered
     query = """
         SELECT 
             ra.id, ra.member_id, 
