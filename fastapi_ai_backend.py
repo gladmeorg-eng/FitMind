@@ -1,6 +1,10 @@
+
 import os
 from fastapi import FastAPI
 from google import genai
+
+# Initialize FastAPI app (this fixes the NameError)
+app = FastAPI()
 
 # Initialize Gemini using the key you saved in Render
 gemini_key = os.getenv("GEMINI_API_KEY")
