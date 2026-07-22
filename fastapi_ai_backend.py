@@ -78,7 +78,7 @@ class OpenAIService:
     async def chat_completion(self, system_prompt: str, user_message: str, conversation_id: Optional[str] = None) -> dict:
         try:
             response = client.models.generate_content(
-                model="gemini-1.5-flash",
+                model="gemini-3.5-flash",
                 contents=user_message
             )
             return {
