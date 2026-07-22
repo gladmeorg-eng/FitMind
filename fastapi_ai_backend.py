@@ -107,25 +107,20 @@ class OpenAIService:
         self.model = "gpt-4o"
 
     async def chat_completion(self, system_prompt: str, user_message: str, conversation_id: Optional[str] = None) -> dict:
-        if self.api_key:
-            try:
-                import openai
-                client = openai.AsyncOpenAI(api_key=self.api_key)
-                response = await client.chat.completions.create(
-                    model=self.model,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_message}
-                    ],
-                    temperature=0.7,
-                    max_tokens=500
-                )
-                text = response.choices[0].message.content or "Processed."
-                return {"text": text, "conversation_id": conversation_id or "conv_123"}
-            except Exception:
-                return {"text": f"FitMind AI Assistant: Received '{user_message}'", "conversation_id": conversation_id or "conv_123"}
-        return {"text": f"FitMind AI Assistant (Demo Mode): Received '{user_message}'", "conversation_id": conversation_id or "conv_123"}
-
+       try:
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=user_message
+            )
+            return {
+                "text": response.text,
+                "conversation_id": conversation_id or "conv_123"
+            }
+        except Exception as e:
+            return {
+                "text": f"Error: {str(e)}",
+                "conversation_id": conversation_id or "conv_123"
+            }
     async def generate_insights(self, prompt: str) -> List[dict]:
         return [
             {"action": "Offer 1-on-1 coaching for members with 0 visits in last 14 days", "expected_impact": "High", "confidence": 0.85},
