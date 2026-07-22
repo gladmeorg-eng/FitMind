@@ -147,7 +147,7 @@ async def resolve_retention_alert(
     resolution_notes: Optional[str] = None,
     db: AsyncSession = Depends(get_db)
 ):
-    """Mark a retention alert as resolved."""
+    # Mark a retention alert as resolved
     await db.execute("""
         UPDATE retention_alerts 
         SET status = 'resolved', 
