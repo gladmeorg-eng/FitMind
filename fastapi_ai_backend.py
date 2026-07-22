@@ -1,31 +1,38 @@
 
 import os
+from typing import Optional, Dict, Any
 from fastapi import FastAPI
+from pydantic import BaseModel
 from google import genai
 
-# Initialize FastAPI app
 app = FastAPI()
 
-# Initialize Gemini using the key saved in Render
 gemini_key = os.getenv("GEMINI_API_KEY")
 client = genai.Client(api_key=gemini_key) if gemini_key else None
 
-# Root route for Render health checks
+class ChatRequest(BaseModel):
+    message: str
+    context: Optional[Dict[str, Any]] = None
+    conversation_id: Optional[str] = None
+
 @app.get("/")
 async def root():
     return {"status": "FitMind AI Backend is live!", "docs": "/docs"}
 
 @app.post("/v3/gyms/{gym_id}/ai/chat")
-async def ai_chat(gym_id: str, message: str):
+async def ai_chat(gym_id: str, request: ChatRequest):
     if not client:
         return {"response": "Error: GEMINI_API_KEY not found in Render environment variables."}
     
     try:
         response = client.models.generate_content(
             model="gemini-2.5-flash",
-            contents=message
+            contents=request.message
         )
-        return {"response": response.text}
+        return {
+            "response": response.text,
+            "conversation_id": request.conversation_id
+        }
     except Exception as e:
         return {"error": str(e)}
 import os
