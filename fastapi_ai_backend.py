@@ -123,17 +123,7 @@ async def get_retention_alerts(
     status: Optional[str] = "open",
     db: AsyncSession = Depends(get_db),
 ):
-    # Get all retention alerts for a gym, optionally filtered
-    query = """
-        SELECT 
-            ra.id, ra.member_id, 
-            m.first_name || ' ' || m.last_name as member_name,
-            ra.alert_type, ra.severity, ra.description,
-            ra.ai_recommendation, ra.status, ra.created_at
-        FROM retention_alerts ra
-        JOIN members m ON m.id = ra.member_id
-        WHERE ra.gym_id = :gym_id
-    """
+    query = "SELECT ra.id, ra.member_id, m.first_name || ' ' || m.last_name as member_name, ra.alert_type, ra.severity, ra.description, ra.ai_recommendation, ra.status, ra.created_at FROM retention_alerts ra JOIN members m ON m.id = ra.member_id WHERE ra.gym_id = :gym_id"
     params = {"gym_id": gym_id}
 
     if severity != "all":
