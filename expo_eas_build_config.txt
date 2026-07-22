@@ -1,0 +1,543 @@
+# ============================================================
+# FILE: apps/mobile/eas.json
+# Expo Application Services - Build Configuration
+# ============================================================
+
+{
+  "cli": {
+    "version": ">= 7.0.0"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "env": {
+        "API_URL": "https://staging-api.fitmind.ai/v3"
+      }
+    },
+    "preview": {
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
+      "ios": {
+        "enterpriseProvisioning": "adhoc"
+      },
+      "env": {
+        "API_URL": "https://staging-api.fitmind.ai/v3"
+      }
+    },
+    "production": {
+      "autoIncrement": true,
+      "android": {
+        "buildType": "app-bundle"
+      },
+      "ios": {
+        "resourceClass": "m-medium"
+      },
+      "env": {
+        "API_URL": "https://api.fitmind.ai/v3"
+      }
+    }
+  },
+  "submit": {
+    "production": {
+      "android": {
+        "serviceAccountKeyPath": "./google-service-account.json",
+        "track": "production"
+      },
+      "ios": {
+        "ascAppId": "1234567890",
+        "ascTeamId": "TEAM123456",
+        "ascApiKeyPath": "./AuthKey.p8",
+        "ascApiKeyIssuerId": "ISSUER123",
+        "ascApiKeyId": "KEY123"
+      }
+    }
+  }
+}
+
+# ============================================================
+# FILE: apps/mobile/app.json
+# Expo App Configuration
+# ============================================================
+
+{
+  "expo": {
+    "name": "FitMind AI",
+    "slug": "fitmind-ai",
+    "version": "3.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0a0a14"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "ai.fitmind.app",
+      "buildNumber": "3.0.0",
+      "infoPlist": {
+        "NSCameraUsageDescription": "This app uses the camera to scan QR codes for gym check-in.",
+        "NSPhotoLibraryUsageDescription": "This app needs access to photos for profile pictures.",
+        "UIBackgroundModes": [
+          "fetch",
+          "remote-notification"
+        ]
+      },
+      "config": {
+        "usesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "package": "ai.fitmind.app",
+      "versionCode": 300,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0a0a14"
+      },
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.INTERNET",
+        "android.permission.ACCESS_NETWORK_STATE",
+        "android.permission.VIBRATE",
+        "android.permission.RECEIVE_BOOT_COMPLETED",
+        "android.permission.SCHEDULE_EXACT_ALARM"
+      ],
+      "notification": {
+        "icon": "./assets/notification-icon.png",
+        "color": "#6366f1",
+        "sounds": ["./assets/notification-sound.wav"]
+      }
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow FitMind AI to access your camera for QR check-in."
+        }
+      ],
+      [
+        "expo-secure-store",
+        {
+          "faceIDPermission": "Allow FitMind AI to use Face ID to secure your account."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#6366f1",
+          "sounds": ["./assets/notification-sound.wav"]
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "newArchEnabled": true,
+            "flipper": false
+          },
+          "android": {
+            "newArchEnabled": true
+          }
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "your-eas-project-id-here"
+      }
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/your-eas-project-id-here"
+    },
+    "owner": "fitmind-ai"
+  }
+}
+
+# ============================================================
+# FILE: apps/mobile/src/services/NotificationService.ts
+# Push Notification Handler
+# ============================================================
+
+import * as Notifications from 'expo-notifications';
+import * as Device from 'expo-device';
+import { Platform } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { api } from '../api/client';
+
+class NotificationService {
+  private token: string | null = null;
+
+  async initialize() {
+    // Set notification handler
+    Notifications.setNotificationHandler({
+      handleNotification: async () => ({
+        shouldShowAlert: true,
+        shouldPlaySound: true,
+        shouldSetBadge: true,
+      }),
+    });
+
+    // Request permissions
+    const { status: existingStatus } = await Notifications.getPermissionsAsync();
+    let finalStatus = existingStatus;
+
+    if (existingStatus !== 'granted') {
+      const { status } = await Notifications.requestPermissionsAsync();
+      finalStatus = status;
+    }
+
+    if (finalStatus !== 'granted') {
+      console.log('Push notification permission denied');
+      return;
+    }
+
+    // Get push token
+    if (Device.isDevice) {
+      const { data: pushToken } = await Notifications.getExpoPushTokenAsync({
+        projectId: 'your-eas-project-id-here'
+      });
+      this.token = pushToken;
+
+      // Save to server
+      await this.registerToken(pushToken);
+    }
+
+    // Listen for notifications
+    Notifications.addNotificationReceivedListener(this.handleNotification);
+    Notifications.addNotificationResponseReceivedListener(this.handleNotificationResponse);
+  }
+
+  private async registerToken(token: string) {
+    try {
+      const authToken = await AsyncStorage.getItem('fitmind_token');
+      await api.post('/member/push-token', 
+        { push_token: token, device_type: Platform.OS },
+        { headers: { Authorization: `Bearer ${authToken}` } }
+      );
+    } catch (err) {
+      console.error('Failed to register push token:', err);
+    }
+  }
+
+  private handleNotification(notification: Notifications.Notification) {
+    const { title, body, data } = notification.request.content;
+
+    // Handle different notification types
+    switch (data?.type) {
+      case 'class_reminder':
+        // Show class reminder
+        console.log('Class reminder:', title, body);
+        break;
+      case 'retention_alert':
+        // Show retention message
+        console.log('Retention alert:', title, body);
+        break;
+      case 'payment_failed':
+        // Show payment issue
+        console.log('Payment failed:', title, body);
+        break;
+      case 'milestone':
+        // Show celebration
+        console.log('Milestone:', title, body);
+        break;
+      default:
+        console.log('Notification:', title, body);
+    }
+  }
+
+  private handleNotificationResponse(response: Notifications.NotificationResponse) {
+    const { data } = response.notification.request.content;
+
+    // Navigate based on notification type
+    switch (data?.type) {
+      case 'class_reminder':
+        // Navigate to class detail
+        break;
+      case 'retention_alert':
+        // Navigate to booking screen
+        break;
+      case 'payment_failed':
+        // Navigate to billing screen
+        break;
+    }
+  }
+
+  async scheduleLocalNotification(title: string, body: string, trigger: Date) {
+    await Notifications.scheduleNotificationAsync({
+      content: { title, body },
+      trigger: { date: trigger },
+    });
+  }
+
+  async cancelAllNotifications() {
+    await Notifications.cancelAllScheduledNotificationsAsync();
+  }
+}
+
+export const notificationService = new NotificationService();
+
+# ============================================================
+# FILE: apps/mobile/src/services/DeepLinkService.ts
+# Deep Link Handler for Referrals & Campaigns
+# ============================================================
+
+import * as Linking from 'expo-linking';
+import { NavigationContainerRef } from '@react-navigation/native';
+
+class DeepLinkService {
+  private navigationRef: NavigationContainerRef<any> | null = null;
+
+  setNavigationRef(ref: NavigationContainerRef<any>) {
+    this.navigationRef = ref;
+  }
+
+  initialize() {
+    // Handle initial URL (app opened from deep link)
+    Linking.getInitialURL().then((url) => {
+      if (url) {
+        this.handleUrl(url);
+      }
+    });
+
+    // Handle URL changes (app already open)
+    Linking.addEventListener('url', ({ url }) => {
+      this.handleUrl(url);
+    });
+  }
+
+  private handleUrl(url: string) {
+    const { path, queryParams } = Linking.parse(url);
+
+    // Handle referral links
+    if (path?.includes('referral')) {
+      const referralCode = queryParams?.code;
+      if (referralCode) {
+        this.navigationRef?.navigate('Referral', { code: referralCode });
+      }
+    }
+
+    // Handle class booking links
+    if (path?.includes('book')) {
+      const classId = queryParams?.classId;
+      if (classId) {
+        this.navigationRef?.navigate('ClassDetail', { classId });
+      }
+    }
+
+    // Handle win-back campaign links
+    if (path?.includes('winback')) {
+      const campaignId = queryParams?.campaign;
+      this.navigationRef?.navigate('SpecialOffer', { campaignId });
+    }
+
+    // Handle payment update links
+    if (path?.includes('payment')) {
+      this.navigationRef?.navigate('Billing', { action: 'update' });
+    }
+  }
+
+  generateReferralLink(code: string): string {
+    return `https://fitmind.ai/referral?code=${code}`;
+  }
+
+  generateClassLink(classId: string): string {
+    return `https://fitmind.ai/book?classId=${classId}`;
+  }
+}
+
+export const deepLinkService = new DeepLinkService();
+
+# ============================================================
+# FILE: apps/mobile/src/services/OfflineService.ts
+# Offline Support for Member App
+# ============================================================
+
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import NetInfo from '@react-native-community/netinfo';
+
+class OfflineService {
+  private isOnline: boolean = true;
+
+  constructor() {
+    NetInfo.addEventListener((state) => {
+      this.isOnline = state.isConnected ?? false;
+      if (this.isOnline) {
+        this.syncPendingActions();
+      }
+    });
+  }
+
+  async queueAction(action: string, data: any) {
+    const pending = await this.getPendingActions();
+    pending.push({ action, data, timestamp: Date.now() });
+    await AsyncStorage.setItem('pending_actions', JSON.stringify(pending));
+  }
+
+  async getPendingActions(): Promise<any[]> {
+    const stored = await AsyncStorage.getItem('pending_actions');
+    return stored ? JSON.parse(stored) : [];
+  }
+
+  async syncPendingActions() {
+    const pending = await this.getPendingActions();
+    if (pending.length === 0) return;
+
+    for (const item of pending) {
+      try {
+        // Execute pending action
+        await this.executeAction(item.action, item.data);
+      } catch (err) {
+        console.error('Failed to sync action:', err);
+      }
+    }
+
+    // Clear pending actions
+    await AsyncStorage.removeItem('pending_actions');
+  }
+
+  private async executeAction(action: string, data: any) {
+    // Import API client dynamically to avoid circular dependency
+    const { api } = await import('../api/client');
+
+    switch (action) {
+      case 'book_class':
+        await api.post('/member/bookings', { class_id: data.classId });
+        break;
+      case 'cancel_booking':
+        await api.post(`/member/bookings/${data.bookingId}/cancel`);
+        break;
+      case 'check_in':
+        await api.post('/member/check-in', { location: data.location });
+        break;
+    }
+  }
+
+  isConnected(): boolean {
+    return this.isOnline;
+  }
+}
+
+export const offlineService = new OfflineService();
+
+# ============================================================
+# FILE: apps/mobile/src/hooks/useAnalytics.ts
+# Analytics Hook for Member Behavior Tracking
+# ============================================================
+
+import { useEffect, useRef } from 'react';
+import { AppState, AppStateStatus } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { api } from '../api/client';
+
+export function useAnalytics() {
+  const sessionStart = useRef(Date.now());
+  const screenTime = useRef<Record<string, number>>({});
+  const currentScreen = useRef('Home');
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', handleAppStateChange);
+    return () => subscription.remove();
+  }, []);
+
+  const handleAppStateChange = (nextAppState: AppStateStatus) => {
+    if (nextAppState === 'background') {
+      // App going to background - log session
+      logSession();
+    }
+  };
+
+  const logSession = async () => {
+    const duration = Date.now() - sessionStart.current;
+    const token = await AsyncStorage.getItem('fitmind_token');
+
+    if (token) {
+      await api.post('/member/analytics/session', {
+        duration,
+        screens: screenTime.current,
+      }, {
+        headers: { Authorization: `Bearer ${token}` }
+      }).catch(() => {}); // Silently fail
+    }
+  };
+
+  const trackScreen = (screenName: string) => {
+    const now = Date.now();
+    const previousScreen = currentScreen.current;
+
+    if (screenTime.current[previousScreen]) {
+      screenTime.current[previousScreen] += now - sessionStart.current;
+    } else {
+      screenTime.current[previousScreen] = now - sessionStart.current;
+    }
+
+    currentScreen.current = screenName;
+    sessionStart.current = now;
+  };
+
+  const trackEvent = async (eventType: string, metadata?: Record<string, any>) => {
+    const token = await AsyncStorage.getItem('fitmind_token');
+    if (!token) return;
+
+    await api.post('/member/analytics/event', {
+      event_type: eventType,
+      metadata,
+      timestamp: new Date().toISOString(),
+    }, {
+      headers: { Authorization: `Bearer ${token}` }
+    }).catch(() => {});
+  };
+
+  return { trackScreen, trackEvent, logSession };
+}
+
+# ============================================================
+# BUILD & DEPLOY COMMANDS
+# ============================================================
+
+# Development build (local testing)
+eas build --profile development --platform ios
+eas build --profile development --platform android
+
+# Preview build (share with beta testers)
+eas build --profile preview --platform ios
+eas build --profile preview --platform android
+
+# Production build (App Store / Play Store)
+eas build --profile production --platform ios
+eas build --profile production --platform android
+
+# Submit to stores
+eas submit --platform ios --profile production
+eas submit --platform android --profile production
+
+# Over-the-air updates (no app store review needed)
+eas update --branch production --message "Bug fixes and improvements"
+
+# Configure project
+eas login
+eas configure
+
+# ============================================================
+# REQUIRED ASSETS (Create these in apps/mobile/assets/)
+# ============================================================
+
+# icon.png - 1024x1024 app icon
+# adaptive-icon.png - 1024x1024 Android adaptive icon foreground
+# splash.png - 1242x2436 splash screen
+# notification-icon.png - 96x96 notification icon
+# notification-sound.wav - Custom notification sound
+# favicon.png - 32x32 web favicon

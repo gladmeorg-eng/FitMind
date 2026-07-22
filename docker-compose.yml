@@ -1,0 +1,221 @@
+# ============================================================
+# FILE: docker-compose.yml
+# FitMind AI Gym OS - Complete Infrastructure
+# Run: docker-compose up -d
+# ============================================================
+
+version: '3.8'
+
+services:
+  # ============================================================
+  # PostgreSQL Database
+  # ============================================================
+  postgres:
+    image: postgres:15-alpine
+    container_name: fitmind-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: fitmind
+      POSTGRES_PASSWORD: fitmind_secure_2026
+      POSTGRES_DB: fitmind
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./services/database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+      - ./services/database/seeds.sql:/docker-entrypoint-initdb.d/02-seeds.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fitmind -d fitmind"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - fitmind-network
+
+  # ============================================================
+  # Redis Cache & Message Broker
+  # ============================================================
+  redis:
+    image: redis:7-alpine
+    container_name: fitmind-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - fitmind-network
+
+  # ============================================================
+  # AI Backend (Python/FastAPI)
+  # ============================================================
+  ai-engine:
+    build:
+      context: ./services/ai-engine
+      dockerfile: Dockerfile
+    container_name: fitmind-ai-engine
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://fitmind:fitmind_secure_2026@postgres:5432/fitmind
+      - REDIS_URL=redis://redis:6379/0
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - JWT_SECRET=${JWT_SECRET}
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
+      - TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID}
+      - TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN}
+      - TWILIO_PHONE_NUMBER=${TWILIO_PHONE_NUMBER}
+      - SENDGRID_API_KEY=${SENDGRID_API_KEY}
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./services/ai-engine:/app
+      - ai_models:/app/models
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - fitmind-network
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # ============================================================
+  # Celery Worker (Background Tasks)
+  # ============================================================
+  celery-worker:
+    build:
+      context: ./services/ai-engine
+      dockerfile: Dockerfile
+    container_name: fitmind-celery
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://fitmind:fitmind_secure_2026@postgres:5432/fitmind
+      - REDIS_URL=redis://redis:6379/0
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - JWT_SECRET=${JWT_SECRET}
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
+      - TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID}
+      - TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN}
+      - TWILIO_PHONE_NUMBER=${TWILIO_PHONE_NUMBER}
+      - SENDGRID_API_KEY=${SENDGRID_API_KEY}
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+    volumes:
+      - ./services/ai-engine:/app
+      - ai_models:/app/models
+    depends_on:
+      - redis
+      - postgres
+    networks:
+      - fitmind-network
+    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=4
+
+  # ============================================================
+  # Celery Beat (Scheduled Tasks)
+  # ============================================================
+  celery-beat:
+    build:
+      context: ./services/ai-engine
+      dockerfile: Dockerfile
+    container_name: fitmind-celery-beat
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://fitmind:fitmind_secure_2026@postgres:5432/fitmind
+      - REDIS_URL=redis://redis:6379/0
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - JWT_SECRET=${JWT_SECRET}
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+    volumes:
+      - ./services/ai-engine:/app
+      - celery_beat:/app/celerybeat
+    depends_on:
+      - redis
+      - postgres
+    networks:
+      - fitmind-network
+    command: celery -A app.workers.celery_app beat --loglevel=info
+
+  # ============================================================
+  # Next.js Web Dashboard
+  # ============================================================
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+    container_name: fitmind-web
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgresql://fitmind:fitmind_secure_2026@postgres:5432/fitmind
+      - JWT_SECRET=${JWT_SECRET}
+      - NEXT_PUBLIC_API_URL=http://localhost:8000/v3
+      - API_URL=http://ai-engine:8000/v3
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./apps/web:/app
+      - /app/node_modules
+      - /app/.next
+    depends_on:
+      - ai-engine
+      - postgres
+    networks:
+      - fitmind-network
+    command: npm run dev
+
+  # ============================================================
+  # Nginx Reverse Proxy (Production)
+  # ============================================================
+  nginx:
+    image: nginx:alpine
+    container_name: fitmind-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ./nginx/ssl:/etc/nginx/ssl
+    depends_on:
+      - web
+      - ai-engine
+    networks:
+      - fitmind-network
+
+  # ============================================================
+  # ClickHouse Analytics (Optional - for large gyms)
+  # ============================================================
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    container_name: fitmind-clickhouse
+    restart: unless-stopped
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    environment:
+      - CLICKHOUSE_DB=fitmind_analytics
+      - CLICKHOUSE_USER=fitmind
+      - CLICKHOUSE_PASSWORD=fitmind_analytics_2026
+    networks:
+      - fitmind-network
+
+volumes:
+  postgres_data:
+  redis_data:
+  ai_models:
+  celery_beat:
+  clickhouse_data:
+
+networks:
+  fitmind-network:
+    driver: bridge

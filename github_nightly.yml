@@ -1,0 +1,30 @@
+name: Nightly Tasks
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+
+jobs:
+  nightly:
+    name: Nightly Maintenance
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Retrain churn model
+        run: |
+          ssh deploy@fitmind.ai << 'EOF'
+            docker exec fitmind-ai-engine python -m app.models.retrain_churn
+          EOF
+
+      - name: Cleanup old data
+        run: |
+          ssh deploy@fitmind.ai << 'EOF'
+            docker exec fitmind-postgres psql -U fitmind -c "DELETE FROM activity_logs WHERE created_at < NOW() - INTERVAL '90 days';"
+            docker exec fitmind-postgres psql -U fitmind -c "VACUUM ANALYZE activity_logs;"
+          EOF
+
+      - name: Generate daily report
+        run: |
+          ssh deploy@fitmind.ai << 'EOF'
+            docker exec fitmind-ai-engine python -m app.reports.daily >> /var/log/fitmind/daily-report.log
+          EOF

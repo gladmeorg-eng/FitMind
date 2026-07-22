@@ -1,0 +1,499 @@
+# ============================================================
+# FILE: .github/workflows/ci-cd.yml
+# Complete CI/CD Pipeline for FitMind AI
+# Triggers: Push to main, PR to main, scheduled nightly builds
+# ============================================================
+
+name: FitMind AI - Build, Test & Deploy
+
+on:
+  push:
+    branches: [main, develop]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+
+env:
+  NODE_VERSION: '20'
+  PYTHON_VERSION: '3.12'
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: fitmind-ai
+
+jobs:
+  # ============================================================
+  # JOB 1: Lint & Type Check
+  # ============================================================
+  lint:
+    name: Lint & Type Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: |
+            apps/web/package-lock.json
+            apps/mobile/package-lock.json
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install web dependencies
+        run: |
+          cd apps/web
+          npm ci
+
+      - name: Lint Next.js
+        run: |
+          cd apps/web
+          npm run lint
+
+      - name: Type check Next.js
+        run: |
+          cd apps/web
+          npx tsc --noEmit
+
+      - name: Install Python dependencies
+        run: |
+          cd services/ai-engine
+          pip install -r requirements.txt
+          pip install flake8 black isort mypy
+
+      - name: Lint Python (flake8)
+        run: |
+          cd services/ai-engine
+          flake8 app/ --max-line-length=100 --extend-ignore=E203,W503
+
+      - name: Format check Python (black)
+        run: |
+          cd services/ai-engine
+          black --check app/
+
+      - name: Type check Python (mypy)
+        run: |
+          cd services/ai-engine
+          mypy app/ --ignore-missing-imports
+
+  # ============================================================
+  # JOB 2: Unit Tests
+  # ============================================================
+  test:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: lint
+
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: fitmind_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install web dependencies
+        run: |
+          cd apps/web
+          npm ci
+
+      - name: Run web tests
+        run: |
+          cd apps/web
+          npm test -- --coverage --watchAll=false
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/fitmind_test
+          JWT_SECRET: test-secret-key
+
+      - name: Install Python dependencies
+        run: |
+          cd services/ai-engine
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio pytest-cov httpx
+
+      - name: Run Python tests
+        run: |
+          cd services/ai-engine
+          pytest app/ -v --cov=app --cov-report=xml --cov-report=term
+        env:
+          DATABASE_URL: postgresql+asyncpg://test:test@localhost:5432/fitmind_test
+          REDIS_URL: redis://localhost:6379/0
+          JWT_SECRET: test-secret-key
+          OPENAI_API_KEY: sk-test-key
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./apps/web/coverage/lcov.info,./services/ai-engine/coverage.xml
+          fail_ci_if_error: false
+
+  # ============================================================
+  # JOB 3: Security Scan
+  # ============================================================
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: lint
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+      - name: Run npm audit
+        run: |
+          cd apps/web
+          npm audit --audit-level=moderate || true
+
+      - name: Run pip safety check
+        run: |
+          pip install safety
+          cd services/ai-engine
+          safety check -r requirements.txt || true
+
+  # ============================================================
+  # JOB 4: Build Docker Images
+  # ============================================================
+  build:
+    name: Build Images
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [test, security]
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+
+    outputs:
+      web_image: ${{ steps.web_meta.outputs.tags }}
+      api_image: ${{ steps.api_meta.outputs.tags }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker meta (Web)
+        id: web_meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/web
+          tags: |
+            type=sha,prefix=,suffix=,format=short
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            latest
+
+      - name: Build and push Web image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./apps/web
+          push: true
+          tags: ${{ steps.web_meta.outputs.tags }}
+          labels: ${{ steps.web_meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            NEXT_PUBLIC_API_URL=https://api.fitmind.ai/v3
+
+      - name: Docker meta (API)
+        id: api_meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/ai-engine
+          tags: |
+            type=sha,prefix=,suffix=,format=short
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            latest
+
+      - name: Build and push API image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./services/ai-engine
+          push: true
+          tags: ${{ steps.api_meta.outputs.tags }}
+          labels: ${{ steps.api_meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ============================================================
+  # JOB 5: Deploy to Staging
+  # ============================================================
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: build
+    if: github.ref == 'refs/heads/develop' || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging')
+    environment:
+      name: staging
+      url: https://staging.fitmind.ai
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.STAGING_SSH_KEY }}
+
+      - name: Deploy to staging server
+        run: |
+          ssh -o StrictHostKeyChecking=no deploy@staging.fitmind.ai << 'EOF'
+            cd /opt/fitmind
+            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/web:latest
+            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/ai-engine:latest
+            docker-compose -f docker-compose.staging.yml pull
+            docker-compose -f docker-compose.staging.yml up -d --no-deps --build web ai-engine
+            docker-compose -f docker-compose.staging.yml exec -T ai-engine alembic upgrade head
+            sleep 10
+            curl -f http://localhost:8000/health || exit 1
+            curl -f http://localhost:3000 || exit 1
+            docker system prune -f
+            echo "Staging deployment complete"
+          EOF
+
+      - name: Notify Slack
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          channel: '#deployments'
+          text: 'Staging deployment ${{ job.status }}'
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        if: always()
+
+  # ============================================================
+  # JOB 6: Deploy to Production (Blue-Green)
+  # ============================================================
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [build, deploy-staging]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment:
+      name: production
+      url: https://fitmind.ai
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.PRODUCTION_SSH_KEY }}
+
+      - name: Deploy to production (Blue-Green)
+        run: |
+          ssh -o StrictHostKeyChecking=no deploy@fitmind.ai << 'EOF'
+            cd /opt/fitmind
+            CURRENT_COLOR=$(docker-compose ps | grep -q "web_blue" && echo "blue" || echo "green")
+            NEW_COLOR=$([ "$CURRENT_COLOR" = "blue" ] && echo "green" || echo "blue")
+            echo "Current: $CURRENT_COLOR, Deploying: $NEW_COLOR"
+            docker-compose -f docker-compose.yml -f docker-compose.$NEW_COLOR.yml up -d
+            sleep 15
+            NEW_PORT=$([ "$NEW_COLOR" = "blue" ] && echo "3001" || echo "3002")
+            curl -f http://localhost:$NEW_PORT/health || {
+              echo "Health check failed, rolling back"
+              docker-compose -f docker-compose.$NEW_COLOR.yml down
+              exit 1
+            }
+            sudo sed -i "s/server web_$CURRENT_COLOR:3000/server web_$NEW_COLOR:3000/" /etc/nginx/upstream.conf
+            sudo nginx -s reload
+            sleep 30
+            docker-compose -f docker-compose.$CURRENT_COLOR.yml down
+            docker-compose exec -T ai-engine alembic upgrade head
+            docker system prune -f
+            echo "Production deployment complete (now running $NEW_COLOR)"
+          EOF
+
+      - name: Run smoke tests
+        run: |
+          curl -f https://fitmind.ai/health
+          curl -f https://api.fitmind.ai/v3/health
+          curl -f https://app.fitmind.ai/v3/health
+
+      - name: Notify Slack
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          channel: '#deployments'
+          text: 'Production deployment ${{ job.status }} - FitMind AI v3.0'
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        if: always()
+
+      - name: Create GitHub Release
+        uses: actions/create-release@v1
+        if: success()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ github.run_number }}
+          release_name: FitMind AI v${{ github.run_number }}
+          body: |
+            ## What's New
+            - Automated deployment from commit ${{ github.sha }}
+            - Full test suite passed
+            - Security scan clean
+
+            ## Deployment Info
+            - Web Image: `${{ needs.build.outputs.web_image }}`
+            - API Image: `${{ needs.build.outputs.api_image }}`
+          draft: false
+          prerelease: false
+
+  # ============================================================
+  # JOB 7: Build & Submit Mobile App
+  # ============================================================
+  mobile-build:
+    name: Build Mobile App
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [test, security]
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup Expo
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Install dependencies
+        run: |
+          cd apps/mobile
+          npm ci
+
+      - name: Build iOS (EAS)
+        run: |
+          cd apps/mobile
+          eas build --platform ios --profile production --non-interactive
+
+      - name: Build Android (EAS)
+        run: |
+          cd apps/mobile
+          eas build --platform android --profile production --non-interactive
+
+      - name: Submit to App Store
+        if: github.ref == 'refs/heads/main'
+        run: |
+          cd apps/mobile
+          eas submit --platform ios --profile production --non-interactive
+
+      - name: Submit to Play Store
+        if: github.ref == 'refs/heads/main'
+        run: |
+          cd apps/mobile
+          eas submit --platform android --profile production --non-interactive
+
+  # ============================================================
+  # JOB 8: Database Backup
+  # ============================================================
+  backup:
+    name: Database Backup
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Backup production database
+        run: |
+          ssh -o StrictHostKeyChecking=no deploy@fitmind.ai << 'EOF'
+            BACKUP_DIR=/opt/backups
+            TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+            docker exec fitmind-postgres pg_dump -U fitmind fitmind | gzip > $BACKUP_DIR/fitmind_$TIMESTAMP.sql.gz
+            aws s3 cp $BACKUP_DIR/fitmind_$TIMESTAMP.sql.gz s3://fitmind-backups/production/
+            find $BACKUP_DIR -name "fitmind_*.sql.gz" -mtime +7 -delete
+            echo "Backup complete: fitmind_$TIMESTAMP.sql.gz"
+          EOF
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: us-east-1

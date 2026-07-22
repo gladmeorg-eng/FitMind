@@ -1,0 +1,1672 @@
+
+openapi: 3.0.3
+info:
+  title: FitMind AI Gym OS API
+  description: |
+    Complete REST API for the FitMind AI Gym Operating System.
+    Handles everything from member management to AI-powered retention.
+  version: 3.0.0
+  contact:
+    name: FitMind AI Support
+    email: api@fitmind.ai
+
+servers:
+  - url: https://api.fitmind.ai/v3
+    description: Production
+  - url: https://staging-api.fitmind.ai/v3
+    description: Staging
+
+security:
+  - BearerAuth: []
+  - ApiKeyAuth: []
+
+paths:
+  # ============================================================
+  # AUTHENTICATION
+  # ============================================================
+  /auth/login:
+    post:
+      summary: Login (Owner/Staff)
+      tags: [Authentication]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, minLength: 6 }
+      responses:
+        200:
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { type: string }
+                  refresh_token: { type: string }
+                  user: { $ref: '#/components/schemas/User' }
+                  gym: { $ref: '#/components/schemas/Gym' }
+
+  /auth/member-login:
+    post:
+      summary: Member App Login
+      tags: [Authentication]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email: { type: string }
+                password: { type: string }
+                device_token: { type: string }
+      responses:
+        200:
+          description: Member login successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { type: string }
+                  member: { $ref: '#/components/schemas/Member' }
+
+  /auth/refresh:
+    post:
+      summary: Refresh Access Token
+      tags: [Authentication]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refresh_token: { type: string }
+      responses:
+        200:
+          description: New tokens issued
+
+  # ============================================================
+  # GYM MANAGEMENT
+  # ============================================================
+  /gyms/{gymId}:
+    get:
+      summary: Get Gym Details
+      tags: [Gym Management]
+      parameters:
+        - name: gymId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        200:
+          description: Gym details
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Gym' }
+
+    patch:
+      summary: Update Gym Settings
+      tags: [Gym Management]
+      parameters:
+        - name: gymId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                settings: { type: object }
+                branding: { type: object }
+      responses:
+        200:
+          description: Gym updated
+
+  /gyms/{gymId}/dashboard:
+    get:
+      summary: Get Dashboard Analytics
+      tags: [Gym Management]
+      parameters:
+        - name: gymId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: period
+          in: query
+          schema: { type: string, enum: [today, week, month, quarter, year], default: month }
+      responses:
+        200:
+          description: Dashboard data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  kpis:
+                    type: object
+                    properties:
+                      active_members: { type: integer }
+                      mrr: { type: number }
+                      at_risk_members: { type: integer }
+                      class_occupancy: { type: number }
+                      ai_actions_today: { type: integer }
+                  revenue_chart:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        date: { type: string, format: date }
+                        revenue: { type: number }
+                        new_members: { type: integer }
+                        churned_members: { type: integer }
+                  recent_activity:
+                    type: array
+                    items: { $ref: '#/components/schemas/ActivityLog' }
+
+  # ============================================================
+  # MEMBERS
+  # ============================================================
+  /gyms/{gymId}/members:
+    get:
+      summary: List Members
+      tags: [Members]
+      parameters:
+        - name: gymId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: status
+          in: query
+          schema: { type: string, enum: [active, frozen, expired, cancelled, all], default: active }
+        - name: churn_risk
+          in: query
+          schema: { type: string, enum: [low, medium, high, critical, all], default: all }
+        - name: search
+          in: query
+          schema: { type: string }
+        - name: page
+          in: query
+          schema: { type: integer, default: 1 }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 20 }
+      responses:
+        200:
+          description: Paginated member list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Member' }
+                  pagination:
+                    type: object
+                    properties:
+                      total: { type: integer }
+                      page: { type: integer }
+                      pages: { type: integer }
+
+    post:
+      summary: Create Member
+      tags: [Members]
+      parameters:
+        - name: gymId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [first_name, last_name, email]
+              properties:
+                first_name: { type: string }
+                last_name: { type: string }
+                email: { type: string, format: email }
+                phone: { type: string }
+                membership_type: { type: string, default: 'standard' }
+                monthly_fee: { type: number, default: 0 }
+                billing_cycle: { type: string, default: 'monthly' }
+                referred_by: { type: string, format: uuid }
+      responses:
+        201:
+          description: Member created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Member' }
+
+  /gyms/{gymId}/members/{memberId}:
+    get:
+      summary: Get Member Details
+      tags: [Members]
+      parameters:
+        - name: gymId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: memberId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        200:
+          description: Member with 360 view
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/Member' }
+                  - type: object
+                    properties:
+                      bookings:
+                        type: array
+                        items: { $ref: '#/components/schemas/Booking' }
+                      invoices:
+                        type: array
+                        items: { $ref: '#/components/schemas/Invoice' }
+                      activity_history:
+                        type: array
+                        items: { $ref: '#/components/schemas/ActivityLog' }
+                      retention_alerts:
+                        type: array
+                        items: { $ref: '#/components/schemas/RetentionAlert' }
+
+    patch:
+      summary: Update Member
+      tags: [Members]
+      parameters:
+        - name: gymId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: memberId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                first_name: { type: string }
+                last_name: { type: string }
+                phone: { type: string }
+                membership_status: { type: string }
+                monthly_fee: { type: number }
+      responses:
+        200:
+          description: Member updated
+
+    delete:
+      summary: Soft Delete Member
+      tags: [Members]
+      parameters:
+        - name: gymId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: memberId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        204:
+          description: Member deleted
+
+  /gyms/{gymId}/members/{memberId}/freeze:
+    post:
+      summary: Freeze Membership
+      tags: [Members]
+      parameters:
+        - name: gymId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: memberId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                freeze_start_date: { type: string, format: date }
+                freeze_end_date: { type: string, format: date }
+                reason: { type: string }
+      responses:
+        200:
+          description: Membership frozen
+
+  /gyms/{gymId}/members/{memberId}/check-in:
+    post:
+      summary: Member Check-In
+      tags: [Members]
+      parameters:
+        - name: gymId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: memberId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                method: { type: string, enum: [app, qr, staff], default: 'app' }
+                location: { type: string }
+      responses:
+        200:
+          description: Check-in successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  check_in_id: { type: string }
+                  checked_in_at: { type: string, format: date-time }
+                  visit_streak: { type: integer }
+                  total_visits: { type: integer }
+                  milestone_reached: { type: boolean }
+                  milestone_message: { type: string }
+
+  # ============================================================
+  # CLASSES & SCHEDULING
+  # ============================================================
+  /gyms/{gymId}/class-types:
+    get:
+      summary: List Class Types
+      tags: [Classes]
+      parameters:
+        - name: gymId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        200:
+          description: Class types list
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ClassType' }
+
+    post:
+      summary: Create Class Type
+      tags: [Classes]
+      parameters:
+        - name: gymId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, duration_minutes, max_capacity]
+              properties:
+                name: { type: string }
+                description: { type: string }
+                duration_minutes: { type: integer }
+                max_capacity: { type: integer }
+                color: { type: string }
+                icon: { type: string }
+      responses:
+        201:
+          description: Class type created
+
+  /gyms/{gymId}/schedules:
+    get:
+      summary: Get Weekly Schedule
+      tags: [Classes]
+      parameters:
+        - name: gymId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: week_start
+          in: query
+          schema: { type: string, format: date }
+      responses:
+        200:
+          description: Weekly schedule
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  week_start: { type: string, format: date }
+                  days:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        date: { type: string, format: date }
+                        day_name: { type: string }
+                        classes:
+                          type: array
+                          items: { $ref: '#/components/schemas/ClassInstance' }
+
+  /gyms/{gymId}/classes:
+    get:
+      summary: List Class Instances
+      tags: [Classes]
+      parameters:
+        - name: gymId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: date_from
+          in: query
+          schema: { type: string, format: date }
+        - name: date_to
+          in: query
+          schema: { type: string, format: date }
+        - name: class_type_id
+          in: query
+          schema: { type: string, format: uuid }
+        - name: coach_id
+          in: query
+          schema: { type: string, format: uuid }
+        - name: status
+          in: query
+          schema: { type: string, default: 'scheduled' }
+      responses:
+        200:
+          description: Class instances
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ClassInstance' }
+
+    post:
+      summary: Create Class Instance
+      tags: [Classes]
+      parameters:
+        - name: gymId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [class_type_id, class_date, start_time, end_time]
+              properties:
+                class_type_id: { type: string, format: uuid }
+                coach_id: { type: string, format: uuid }
+                class_date: { type: string, format: date }
+                start_time: { type: string }
+                end_time: { type: string }
+                room: { type: string }
+                max_capacity: { type: integer }
+      responses:
+        201:
+          description: Class created
+
+  /gyms/{gymId}/classes/{classId}:
+    get:
+      summary: Get Class Details
+      tags: [Classes]
+      parameters:
+        - name: gymId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: classId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        200:
+          description: Class with bookings
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/ClassInstance' }
+                  - type: object
+                    properties:
+                      bookings:
+                        type: array
+                        items: { $ref: '#/components/schemas/Booking' }
+                      waitlist:
+                        type: array
+                        items: { $ref: '#/components/schemas/Booking' }
+
+    patch:
+      summary: Update Class
+      tags: [Classes]
+      parameters:
+        - name: gymId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: classId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                coach_id: { type: string, format: uuid }
+                start_time: { type: string }
+                max_capacity: { type: integer }
+                status: { type: string }
+      responses:
+        200:
+          description: Class updated
+
+    delete:
+      summary: Cancel Class
+      tags: [Classes]
+      parameters:
+        - name: gymId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: classId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                cancellation_reason: { type: string }
+                notify_members: { type: boolean, default: true }
+      responses:
+        200:
+          description: Class cancelled, members notified
+
+  # ============================================================
+  # BOOKINGS
+  # ============================================================
+  /gyms/{gymId}/bookings:
+    post:
+      summary: Create Booking
+      tags: [Bookings]
+      parameters:
+        - name: gymId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [member_id, class_id]
+              properties:
+                member_id: { type: string, format: uuid }
+                class_id: { type: string, format: uuid }
+                booking_source: { type: string, default: 'app' }
+      responses:
+        201:
+          description: Booking created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  booking: { $ref: '#/components/schemas/Booking' }
+                  confirmation_code: { type: string }
+                  waitlist_position: { type: integer, nullable: true }
+
+  /gyms/{gymId}/bookings/{bookingId}:
+    delete:
+      summary: Cancel Booking
+      tags: [Bookings]
+      parameters:
+        - name: gymId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: bookingId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string }
+                cancelled_by: { type: string, enum: [member, staff, system] }
+      responses:
+        200:
+          description: Booking cancelled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  refund_amount: { type: number }
+                  late_cancel_fee: { type: number }
+                  waitlist_promoted: { type: boolean }
+                  promoted_member: { $ref: '#/components/schemas/Member', nullable: true }
+
+  /gyms/{gymId}/bookings/{bookingId}/check-in:
+    post:
+      summary: Check In to Class
+      tags: [Bookings]
+      parameters:
+        - name: gymId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: bookingId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        200:
+          description: Checked in
+
+  # ============================================================
+  # BILLING
+  # ============================================================
+  /gyms/{gymId}/invoices:
+    get:
+      summary: List Invoices
+      tags: [Billing]
+      parameters:
+        - name: gymId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: member_id
+          in: query
+          schema: { type: string, format: uuid }
+        - name: status
+          in: query
+          schema: { type: string }
+        - name: page
+          in: query
+          schema: { type: integer, default: 1 }
+      responses:
+        200:
+          description: Invoice list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Invoice' }
+                  total_revenue: { type: number }
+                  total_outstanding: { type: number }
+
+    post:
+      summary: Create Invoice
+      tags: [Billing]
+      parameters:
+        - name: gymId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [member_id, amount]
+              properties:
+                member_id: { type: string, format: uuid }
+                amount: { type: number }
+                description: { type: string }
+                period_start: { type: string, format: date }
+                period_end: { type: string, format: date }
+      responses:
+        201:
+          description: Invoice created
+
+  /gyms/{gymId}/invoices/{invoiceId}/retry:
+    post:
+      summary: Retry Failed Payment
+      tags: [Billing]
+      parameters:
+        - name: gymId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: invoiceId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        200:
+          description: Payment retry initiated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string }
+                  payment_intent_id: { type: string }
+
+  /gyms/{gymId}/billing/stats:
+    get:
+      summary: Billing Statistics
+      tags: [Billing]
+      parameters:
+        - name: gymId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: period
+          in: query
+          schema: { type: string, default: 'month' }
+      responses:
+        200:
+          description: Billing stats
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total_revenue: { type: number }
+                  mrr: { type: number }
+                  failed_payments_count: { type: integer }
+                  failed_payments_amount: { type: number }
+                  recovery_rate: { type: number }
+                  upcoming_renewals: { type: integer }
+
+  # ============================================================
+  # AI RETENTION ENGINE
+  # ============================================================
+  /gyms/{gymId}/retention/alerts:
+    get:
+      summary: Get Retention Alerts
+      tags: [AI Retention]
+      parameters:
+        - name: gymId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: severity
+          in: query
+          schema: { type: string, default: 'all' }
+        - name: status
+          in: query
+          schema: { type: string, default: 'open' }
+      responses:
+        200:
+          description: Retention alerts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  alerts:
+                    type: array
+                    items: { $ref: '#/components/schemas/RetentionAlert' }
+                  summary:
+                    type: object
+                    properties:
+                      total_open: { type: integer }
+                      high_priority: { type: integer }
+                      resolved_today: { type: integer }
+
+  /gyms/{gymId}/retention/alerts/{alertId}/resolve:
+    post:
+      summary: Resolve Retention Alert
+      tags: [AI Retention]
+      parameters:
+        - name: gymId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: alertId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                action_taken: { type: string }
+                resolution_notes: { type: string }
+      responses:
+        200:
+          description: Alert resolved
+
+  /gyms/{gymId}/retention/campaigns:
+    get:
+      summary: List Retention Campaigns
+      tags: [AI Retention]
+      parameters:
+        - name: gymId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        200:
+          description: Campaigns list
+
+    post:
+      summary: Create Retention Campaign
+      tags: [AI Retention]
+      parameters:
+        - name: gymId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, campaign_type]
+              properties:
+                name: { type: string }
+                campaign_type: { type: string }
+                target_segment: { type: string }
+                subject: { type: string }
+                body_text: { type: string }
+                body_html: { type: string }
+                sms_text: { type: string }
+                scheduled_at: { type: string, format: date-time }
+      responses:
+        201:
+          description: Campaign created
+
+  /gyms/{gymId}/retention/campaigns/{campaignId}/launch:
+    post:
+      summary: Launch Campaign
+      tags: [AI Retention]
+      parameters:
+        - name: gymId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: campaignId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        200:
+          description: Campaign launched
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sent_count: { type: integer }
+                  estimated_reach: { type: integer }
+                  campaign: { $ref: '#/components/schemas/RetentionCampaign' }
+
+  /gyms/{gymId}/retention/insights:
+    get:
+      summary: AI Retention Insights
+      tags: [AI Retention]
+      parameters:
+        - name: gymId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        200:
+          description: AI-generated insights
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  churn_prediction:
+                    type: object
+                    properties:
+                      predicted_churn_next_30d: { type: integer }
+                      at_risk_members: { type: array }
+                      top_churn_reasons:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            reason: { type: string }
+                            count: { type: integer }
+                            percentage: { type: number }
+                  recommendations:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        action: { type: string }
+                        expected_impact: { type: string }
+                        confidence: { type: number }
+
+  # ============================================================
+  # AI OPERATIONS ASSISTANT
+  # ============================================================
+  /gyms/{gymId}/ai/chat:
+    post:
+      summary: AI Chat Assistant
+      tags: [AI Assistant]
+      parameters:
+        - name: gymId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message: { type: string }
+                context: { type: object }
+                conversation_id: { type: string }
+      responses:
+        200:
+          description: AI response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  response: { type: string }
+                  actions:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        type: { type: string }
+                        description: { type: string }
+                        parameters: { type: object }
+                  data:
+                    type: object
+                    nullable: true
+                  conversation_id: { type: string }
+
+  /gyms/{gymId}/ai/auto-schedule:
+    post:
+      summary: Auto-Optimize Schedule
+      tags: [AI Assistant]
+      parameters:
+        - name: gymId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                week_start: { type: string, format: date }
+                optimize_for: { type: string, enum: [occupancy, revenue, member_satisfaction], default: 'occupancy' }
+      responses:
+        200:
+          description: Optimized schedule
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  changes:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        action: { type: string }
+                        class_id: { type: string }
+                        old_value: { type: string }
+                        new_value: { type: string }
+                        reason: { type: string }
+                  projected_occupancy_improvement: { type: number }
+                  projected_revenue_impact: { type: number }
+
+  /gyms/{gymId}/ai/pricing-optimize:
+    post:
+      summary: Optimize Pricing
+      tags: [AI Assistant]
+      parameters:
+        - name: gymId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        200:
+          description: Pricing recommendations
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  current_mrr: { type: number }
+                  recommended_mrr: { type: number }
+                  potential_increase: { type: number }
+                  recommendations:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        tier_name: { type: string }
+                        current_price: { type: number }
+                        recommended_price: { type: number }
+                        confidence: { type: number }
+                        reasoning: { type: string }
+
+  # ============================================================
+  # LEADS & SALES
+  # ============================================================
+  /gyms/{gymId}/leads:
+    get:
+      summary: List Leads
+      tags: [Leads]
+      parameters:
+        - name: gymId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: status
+          in: query
+          schema: { type: string, default: 'all' }
+        - name: source
+          in: query
+          schema: { type: string }
+      responses:
+        200:
+          description: Leads list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Lead' }
+                  pipeline_summary:
+                    type: object
+                    properties:
+                      new: { type: integer }
+                      contacted: { type: integer }
+                      tour_scheduled: { type: integer }
+                      converted: { type: integer }
+                      lost: { type: integer }
+
+    post:
+      summary: Create Lead
+      tags: [Leads]
+      parameters:
+        - name: gymId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [source]
+              properties:
+                first_name: { type: string }
+                last_name: { type: string }
+                email: { type: string }
+                phone: { type: string }
+                source: { type: string }
+                source_detail: { type: string }
+                referred_by_member_id: { type: string, format: uuid }
+      responses:
+        201:
+          description: Lead created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Lead' }
+
+  /gyms/{gymId}/leads/{leadId}/convert:
+    post:
+      summary: Convert Lead to Member
+      tags: [Leads]
+      parameters:
+        - name: gymId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: leadId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                membership_type: { type: string }
+                monthly_fee: { type: number }
+                start_date: { type: string, format: date }
+      responses:
+        200:
+          description: Lead converted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  member: { $ref: '#/components/schemas/Member' }
+                  lead: { $ref: '#/components/schemas/Lead' }
+
+  /gyms/{gymId}/leads/{leadId}/nurture:
+    post:
+      summary: Start AI Nurture Sequence
+      tags: [Leads]
+      parameters:
+        - name: gymId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: leadId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        200:
+          description: Nurture sequence started
+
+  # ============================================================
+  # MESSAGING
+  # ============================================================
+  /gyms/{gymId}/messages/send:
+    post:
+      summary: Send Message
+      tags: [Messaging]
+      parameters:
+        - name: gymId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [channel, body]
+              properties:
+                member_ids:
+                  type: array
+                  items: { type: string, format: uuid }
+                channel: { type: string, enum: [email, sms, push, in_app] }
+                subject: { type: string }
+                body: { type: string }
+                scheduled_at: { type: string, format: date-time }
+      responses:
+        200:
+          description: Messages queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  queued_count: { type: integer }
+                  estimated_delivery: { type: string, format: date-time }
+
+  # ============================================================
+  # MEMBER APP ENDPOINTS
+  # ============================================================
+  /member/me:
+    get:
+      summary: Get My Profile
+      tags: [Member App]
+      responses:
+        200:
+          description: Member profile
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/Member' }
+                  - type: object
+                    properties:
+                      upcoming_classes:
+                        type: array
+                        items: { $ref: '#/components/schemas/ClassInstance' }
+                      recent_activity:
+                        type: array
+                        items: { $ref: '#/components/schemas/ActivityLog' }
+                      ai_insights:
+                        type: object
+                        properties:
+                          strength_areas: { type: array, items: { type: string } }
+                          recommended_classes: { type: array }
+                          milestone_progress:
+                            type: object
+                            properties:
+                              current: { type: integer }
+                              target: { type: integer }
+                              type: { type: string }
+
+  /member/classes/available:
+    get:
+      summary: Get Available Classes
+      tags: [Member App]
+      parameters:
+        - name: date
+          in: query
+          schema: { type: string, format: date }
+        - name: class_type_id
+          in: query
+          schema: { type: string, format: uuid }
+      responses:
+        200:
+          description: Available classes with AI recommendations
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  date: { type: string, format: date }
+                  classes:
+                    type: array
+                    items:
+                      allOf:
+                        - { $ref: '#/components/schemas/ClassInstance' }
+                        - type: object
+                          properties:
+                            is_ai_recommended: { type: boolean }
+                            recommendation_reason: { type: string }
+                            spots_remaining: { type: integer }
+                            is_waitlist_available: { type: boolean }
+
+  /member/bookings:
+    get:
+      summary: Get My Bookings
+      tags: [Member App]
+      responses:
+        200:
+          description: My bookings
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  upcoming:
+                    type: array
+                    items: { $ref: '#/components/schemas/Booking' }
+                  past:
+                    type: array
+                    items: { $ref: '#/components/schemas/Booking' }
+
+    post:
+      summary: Book a Class
+      tags: [Member App]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [class_id]
+              properties:
+                class_id: { type: string, format: uuid }
+      responses:
+        201:
+          description: Class booked
+
+  /member/bookings/{bookingId}/cancel:
+    post:
+      summary: Cancel My Booking
+      tags: [Member App]
+      parameters:
+        - name: bookingId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string }
+      responses:
+        200:
+          description: Booking cancelled
+
+  /member/check-in:
+    post:
+      summary: Quick Check-In
+      tags: [Member App]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                location: { type: string }
+      responses:
+        200:
+          description: Checked in
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  check_in_id: { type: string }
+                  visit_streak: { type: integer }
+                  total_visits: { type: integer }
+                  milestone_reached: { type: boolean }
+                  milestone_badge: { type: string }
+
+  /member/billing:
+    get:
+      summary: Get Billing Info
+      tags: [Member App]
+      responses:
+        200:
+          description: Billing details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  current_plan:
+                    type: object
+                    properties:
+                      name: { type: string }
+                      price: { type: number }
+                      billing_cycle: { type: string }
+                      next_renewal: { type: string, format: date }
+                  invoices:
+                    type: array
+                    items: { $ref: '#/components/schemas/Invoice' }
+                  payment_methods:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        type: { type: string }
+                        last4: { type: string }
+                        expiry: { type: string }
+                        is_default: { type: boolean }
+
+  /member/referral:
+    get:
+      summary: Get Referral Info
+      tags: [Member App]
+      responses:
+        200:
+          description: Referral details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  referral_code: { type: string }
+                  referral_link: { type: string }
+                  total_referrals: { type: integer }
+                  pending_referrals: { type: integer }
+                  total_earnings: { type: number }
+                  reward_amount: { type: number }
+                  share_message: { type: string }
+
+  /member/support:
+    post:
+      summary: Submit Support Request
+      tags: [Member App]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [subject, message]
+              properties:
+                subject: { type: string }
+                message: { type: string }
+                category: { type: string }
+      responses:
+        201:
+          description: Support ticket created
+
+# ============================================================
+# COMPONENTS
+# ============================================================
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+
+  schemas:
+    Gym:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        slug: { type: string }
+        plan_type: { type: string }
+        status: { type: string }
+        address: { type: string }
+        city: { type: string }
+        state: { type: string }
+        timezone: { type: string }
+        branding: { type: object }
+        settings: { type: object }
+        created_at: { type: string, format: date-time }
+
+    User:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        gym_id: { type: string, format: uuid }
+        email: { type: string }
+        first_name: { type: string }
+        last_name: { type: string }
+        role: { type: string }
+        avatar_url: { type: string }
+        is_active: { type: boolean }
+        last_login_at: { type: string, format: date-time }
+
+    Member:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        gym_id: { type: string, format: uuid }
+        first_name: { type: string }
+        last_name: { type: string }
+        email: { type: string }
+        phone: { type: string }
+        membership_type: { type: string }
+        membership_status: { type: string }
+        monthly_fee: { type: number }
+        billing_cycle: { type: string }
+        retention_score: { type: integer }
+        churn_risk: { type: string }
+        last_visit_at: { type: string, format: date-time }
+        visit_streak: { type: integer }
+        total_visits: { type: integer }
+        total_classes: { type: integer }
+        avg_weekly_visits: { type: number }
+        referral_code: { type: string }
+        referral_count: { type: integer }
+        app_installed: { type: boolean }
+        created_at: { type: string, format: date-time }
+
+    ClassType:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        gym_id: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: string }
+        duration_minutes: { type: integer }
+        max_capacity: { type: integer }
+        color: { type: string }
+        icon: { type: string }
+        difficulty: { type: string }
+        is_active: { type: boolean }
+
+    ClassInstance:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        gym_id: { type: string, format: uuid }
+        class_type_id: { type: string, format: uuid }
+        coach_id: { type: string, format: uuid }
+        class_type: { $ref: '#/components/schemas/ClassType' }
+        coach:
+          type: object
+          properties:
+            id: { type: string }
+            first_name: { type: string }
+            last_name: { type: string }
+            avatar_url: { type: string }
+        class_date: { type: string, format: date }
+        start_time: { type: string }
+        end_time: { type: string }
+        room: { type: string }
+        max_capacity: { type: integer }
+        booked_count: { type: integer }
+        waitlist_count: { type: integer }
+        spots_remaining: { type: integer }
+        status: { type: string }
+        ai_optimized: { type: boolean }
+
+    Booking:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        gym_id: { type: string, format: uuid }
+        member_id: { type: string, format: uuid }
+        class_id: { type: string, format: uuid }
+        class: { $ref: '#/components/schemas/ClassInstance' }
+        status: { type: string }
+        booked_at: { type: string, format: date-time }
+        cancelled_at: { type: string, format: date-time }
+        checked_in_at: { type: string, format: date-time }
+        waitlist_position: { type: integer }
+        ai_recommended: { type: boolean }
+
+    Invoice:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        gym_id: { type: string, format: uuid }
+        member_id: { type: string, format: uuid }
+        invoice_number: { type: string }
+        amount: { type: number }
+        tax_amount: { type: number }
+        total_amount: { type: number }
+        description: { type: string }
+        period_start: { type: string, format: date }
+        period_end: { type: string, format: date }
+        status: { type: string }
+        paid_at: { type: string, format: date-time }
+        retry_count: { type: integer }
+        next_retry_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+
+    RetentionAlert:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        gym_id: { type: string, format: uuid }
+        member_id: { type: string, format: uuid }
+        member: { $ref: '#/components/schemas/Member' }
+        alert_type: { type: string }
+        severity: { type: string }
+        description: { type: string }
+        ai_recommendation: { type: string }
+        suggested_action: { type: string }
+        status: { type: string }
+        created_at: { type: string, format: date-time }
+
+    RetentionCampaign:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        gym_id: { type: string, format: uuid }
+        name: { type: string }
+        campaign_type: { type: string }
+        target_segment: { type: string }
+        target_count: { type: integer }
+        subject: { type: string }
+        emails_sent: { type: integer }
+        emails_opened: { type: integer }
+        conversions: { type: integer }
+        revenue_generated: { type: number }
+        status: { type: string }
+        created_at: { type: string, format: date-time }
+
+    Lead:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        gym_id: { type: string, format: uuid }
+        first_name: { type: string }
+        last_name: { type: string }
+        email: { type: string }
+        phone: { type: string }
+        source: { type: string }
+        source_detail: { type: string }
+        lead_score: { type: integer }
+        ai_insights: { type: string }
+        status: { type: string }
+        first_contact_at: { type: string, format: date-time }
+        converted_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+
+    ActivityLog:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        gym_id: { type: string, format: uuid }
+        member_id: { type: string, format: uuid }
+        activity_type: { type: string }
+        details: { type: object }
+        created_at: { type: string, format: date-time }
