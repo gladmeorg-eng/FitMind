@@ -1,4 +1,27 @@
 import os
+from fastapi import FastAPI
+from google import genai
+
+app = FastAPI()
+
+# Initialize Gemini Client automatically using GEMINI_API_KEY env var
+gemini_key = os.getenv("GEMINI_API_KEY")
+client = genai.Client(api_key=gemini_key) if gemini_key else None
+
+@app.post("/v3/gyms/{gym_id}/ai/chat")
+async def ai_chat(gym_id: str, message: str):
+    if not client:
+        return {"response": "Demo Mode: Add GEMINI_API_KEY to Render Environment Variables."}
+    
+    try:
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=message
+        )
+        return {"response": response.text}
+    except Exception as e:
+        return {"error": str(e)}
+import os
 import asyncio
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
