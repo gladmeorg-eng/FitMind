@@ -148,14 +148,7 @@ async def resolve_retention_alert(
     db: AsyncSession = Depends(get_db)
 ):
     # Mark a retention alert as resolved
-    await db.execute("""
-        UPDATE retention_alerts 
-        SET status = 'resolved', 
-            resolved_at = NOW(),
-            action_taken = :action_taken,
-            resolution_notes = :notes
-        WHERE id = :alert_id AND gym_id = :gym_id
-    """, {
+    await db.execute("UPDATE retention_alerts SET status = 'resolved', resolved_at = NOW(), action_taken = :action_taken, resolution_notes = :notes WHERE id = :alert_id AND gym_id = :gym_id", {
         "alert_id": alert_id,
         "gym_id": gym_id,
         "action_taken": action_taken,
