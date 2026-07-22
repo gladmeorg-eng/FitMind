@@ -1,40 +1,11 @@
+
+Conversations
+0% of 15 GB used
+Terms · Privacy · Program Policies
+Last account activity: 1 minute ago
+Currently being used in 1 other location · Details
+
 import os
-from typing import Optional, Dict, Any
-from fastapi import FastAPI
-from pydantic import BaseModel
-from google import genai
-
-app = FastAPI()
-
-gemini_key = os.getenv("GEMINI_API_KEY")
-client = genai.Client(api_key=gemini_key) if gemini_key else None
-
-class ChatRequest(BaseModel):
-    message: str
-    context: Optional[Dict[str, Any]] = None
-    conversation_id: Optional[str] = None
-
-@app.get("/")
-async def root():
-    return {"status": "FitMind AI Backend is live!", "docs": "/docs"}
-
-@app.post("/v3/gyms/{gym_id}/ai/chat")
-async def ai_chat(gym_id: str, request: ChatRequest):
-    if not client:
-        return {"response": "Error: GEMINI_API_KEY not found in Render environment variables."}
-    
-    try:
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=request.message
-        )
-        return {
-            "response": response.text,
-            "conversation_id": request.conversation_id or "conv_123"
-        }
-    except Exception as e:
-        return {"error": str(e)}
-        
 import asyncio
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
@@ -44,8 +15,13 @@ from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer
 from pydantic import BaseModel
+from google import genai
 
 security = HTTPBearer()
+
+# --- Initialize Gemini Client ---
+gemini_key = os.getenv("GEMINI_API_KEY")
+client = genai.Client(api_key=gemini_key) if gemini_key else None
 
 # --- Services & Worker Stubs ---
 class RedisClient:
@@ -100,14 +76,14 @@ async def get_db():
             pass
     yield DummyDB()
 
-# --- OpenAI Service ---
+# --- OpenAI / Gemini AI Service ---
 class OpenAIService:
     def __init__(self):
         self.api_key = os.getenv("OPENAI_API_KEY", "")
         self.model = "gpt-4o"
 
     async def chat_completion(self, system_prompt: str, user_message: str, conversation_id: Optional[str] = None) -> dict:
-       try:
+        try:
             response = client.models.generate_content(
                 model="gemini-2.5-flash",
                 contents=user_message
@@ -121,6 +97,7 @@ class OpenAIService:
                 "text": f"Error: {str(e)}",
                 "conversation_id": conversation_id or "conv_123"
             }
+
     async def generate_insights(self, prompt: str) -> List[dict]:
         return [
             {"action": "Offer 1-on-1 coaching for members with 0 visits in last 14 days", "expected_impact": "High", "confidence": 0.85},
@@ -558,5 +535,3 @@ async def optimize_pricing(
 # Include Routers in main app
 app.include_router(retention_router)
 app.include_router(assistant_router)
-
-# force update
